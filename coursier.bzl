@@ -18,7 +18,7 @@ load("//private/rules:v2_lock_file.bzl", "v2_lock_file")
 load("//:specs.bzl", "parse", "utils")
 load("//private:artifact_utilities.bzl", "deduplicate_and_sort_artifacts")
 load("//private:coursier_utilities.bzl", "SUPPORTED_PACKAGING_TYPES", "escape", "is_maven_local_path")
-load("//private:dependency_tree_parser.bzl", "JETIFY_INCLUDE_LIST_JETIFY_ALL", "parser")
+load("//private:dependency_tree_parser.bzl", "JETIFY_INCLUDE_LIST_JETIFY_ALL", "JARINFER_INCLUDE_LIST_JETIFY_ALL", "parser")
 load("//private:java_utilities.bzl", "build_java_argsfile_content", "parse_java_version")
 load("//private:proxy.bzl", "get_java_proxy_args")
 load(
@@ -34,6 +34,7 @@ _BUILD = """
 load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
 load("@rules_jvm_external//private/rules:jvm_import.bzl", "jvm_import")
 load("@rules_jvm_external//private/rules:jetifier.bzl", "jetify_aar_import", "jetify_jvm_import")
+load("@rules_jvm_external//private/rules:jarinfer.bzl", "jarinfer_aar_import", "jarinfer_jvm_import")
 {aar_import_statement}
 
 {imports}
@@ -860,6 +861,25 @@ def _coursier_fetch_impl(repository_ctx):
             report_progress_prefix = "Second pass for Jetified Artifacts: ",
         )
 
+    # Fetch all possible jarinfer artifacts. We will wire them up later.
+    if repository_ctx.attr.jarinfer:
+        dep_tree = make_coursier_dep_tree(
+            repository_ctx,
+            # Order is important due to version conflict resolution. "pinned" will take the last
+            # version that is provided so having the explicit artifacts last makes those versions
+            # stick.
+            artifacts,
+            excluded_artifacts,
+            repositories,
+            repository_ctx.attr.version_conflict_policy,
+            repository_ctx.attr.fail_on_missing_checksum,
+            repository_ctx.attr.fetch_sources,
+            repository_ctx.attr.fetch_javadoc,
+            repository_ctx.attr.use_unsafe_shared_cache,
+            repository_ctx.attr.resolve_timeout,
+            report_progress_prefix = "Second pass for Jarinfer Artifacts: ",
+        )
+
     # Reconstruct the original URLs from the relative path to the artifact,
     # which encodes the URL components for the protocol, domain, and path to
     # the file.
@@ -867,6 +887,9 @@ def _coursier_fetch_impl(repository_ctx):
     files_to_inspect = []
     jetify_include_dict = {k: None for k in repository_ctx.attr.jetify_include_list}
     jetify_all = repository_ctx.attr.jetify and repository_ctx.attr.jetify_include_list == JETIFY_INCLUDE_LIST_JETIFY_ALL
+
+    jarinfer_include_dict = {k: None for k in repository_ctx.attr.jarinfer_include_list}
+    jarinfer_all = repository_ctx.attr.jarinfer and repository_ctx.attr.jarinfer_include_list == JARINFER_INCLUDE_LIST_JETIFY_ALL
 
     for artifact in dep_tree["dependencies"]:
         # Some artifacts don't contain files; they are just parent artifacts
@@ -1185,6 +1208,8 @@ pinned_coursier_fetch = repository_rule(
         "strict_visibility_value": attr.label_list(default = ["//visibility:private"]),
         "jetify": attr.bool(doc = "Runs the AndroidX [Jetifier](https://developer.android.com/studio/command-line/jetifier) tool on artifacts specified in jetify_include_list. If jetify_include_list is not specified, run Jetifier on all artifacts.", default = False),
         "jetify_include_list": attr.string_list(doc = "List of artifacts that need to be jetified in `groupId:artifactId` format. By default all artifacts are jetified if `jetify` is set to True.", default = JETIFY_INCLUDE_LIST_JETIFY_ALL),
+        "jarinfer": attr.bool(doc = "Runs [Jarinfer](https://github.com/uber/NullAway/tree/master/jar-infer/jar-infer-cli) tool on artifacts specified in jarinfer_include_list. If jarinfer_include_list is not specified, run Jarinfer on all artifacts.", default = False),
+        "jarinfer_include_list": attr.string_list(doc = "List of artifacts that need to have jarinfer run on them in `groupId:artifactId` format. By default all artifacts are jarinfered if `jarinfer` is set to True.", default = JARINFER_INCLUDE_LIST_JETIFY_ALL),
         "additional_netrc_lines": attr.string_list(doc = "Additional lines prepended to the netrc file used by `http_file` (with `maven_install_json` only).", default = []),
         "use_credentials_from_home_netrc_file": attr.bool(default = False, doc = "Whether to include coursier credentials gathered from the user home ~/.netrc file"),
         "fail_if_repin_required": attr.bool(doc = "Whether to fail the build if the maven_artifact inputs have changed but the lock file has not been repinned.", default = False),
@@ -1250,6 +1275,8 @@ coursier_fetch = repository_rule(
         "resolve_timeout": attr.int(default = 600),
         "jetify": attr.bool(doc = "Runs the AndroidX [Jetifier](https://developer.android.com/studio/command-line/jetifier) tool on artifacts specified in jetify_include_list. If jetify_include_list is not specified, run Jetifier on all artifacts.", default = False),
         "jetify_include_list": attr.string_list(doc = "List of artifacts that need to be jetified in `groupId:artifactId` format. By default all artifacts are jetified if `jetify` is set to True.", default = JETIFY_INCLUDE_LIST_JETIFY_ALL),
+        "jarinfer": attr.bool(doc = "Runs [Jarinfer](https://github.com/uber/NullAway/tree/master/jar-infer/jar-infer-cli) tool on artifacts specified in jarinfer_include_list. If jarinfer_include_list is not specified, run Jarinfer on all artifacts.", default = False),
+        "jarinfer_include_list": attr.string_list(doc = "List of artifacts that need to have jarinfer run on them in `groupId:artifactId` format. By default all artifacts are jarinfered if `jarinfer` is set to True.", default = JARINFER_INCLUDE_LIST_JETIFY_ALL),
         "use_starlark_android_rules": attr.bool(default = False, doc = "Whether to use the native or Starlark version of the Android rules."),
         "aar_import_bzl_label": attr.string(default = DEFAULT_AAR_IMPORT_LABEL, doc = "The label (as a string) to use to import aar_import from"),
         "duplicate_version_warning": attr.string(
